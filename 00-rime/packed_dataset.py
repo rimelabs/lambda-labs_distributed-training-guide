@@ -41,6 +41,7 @@ def pad_and_collate(data):
 
     return {
         "input_ids" : torch.stack([ d['input_ids'] for d in data ]),
+        "labels" : torch.stack([ d['input_ids'] for d in data ]),
         "attention_mask" : torch.stack([ mask for (mask, pos_ids) in inv_mask_and_pos_ids ]),
         "position_ids" : torch.stack([ pos_ids for (mask, pos_ids) in inv_mask_and_pos_ids ]),
     }
