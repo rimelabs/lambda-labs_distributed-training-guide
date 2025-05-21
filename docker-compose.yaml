@@ -1,0 +1,30 @@
+services:
+  dev_gpu: &dev_gpu
+    build:
+      context: .
+      network: host
+    network_mode: "host"
+    volumes:
+      - ${PWD}:/workspace
+      - ${PWD}/tmp/.cache:/root/.cache
+    working_dir: /workspace
+    entrypoint:
+      - /bin/bash
+    stdin_open: true
+    shm_size: '16gb'
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  nay:
+    <<: *dev_gpu
+
+  ghees:
+    <<: *dev_gpu
+
+  danni:
+    <<: *dev_gpu
