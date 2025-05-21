@@ -1,6 +1,8 @@
-# Benchmark data loading
+# Benchmarks
 
-## Single GPU
+## Data loading
+
+### Single GPU
 
 Just loading data averages ~90k tokens/second with a single process.
 
@@ -12,7 +14,7 @@ python packed_dataset.py
 > ntokens=1236992, lapsed_time=13.58s, toks_per_sec=91065
 ```
 
-## 8 GPUs
+### 8 GPUs
 
 Using 8 GPUs/processes, we can load in about 600k tokens per second.
 
