@@ -48,6 +48,11 @@ def main():
     # Note: Initializing an **untrained** model
     config = AutoConfig.from_pretrained("meta-llama/Llama-3.2-3B-Instruct", use_cache=False)
     with device:
+        from liger_kernel.transformers import apply_liger_kernel_to_llama
+
+        # 1a. Adding this line automatically monkey-patches the model with the optimized Liger kernels
+        apply_liger_kernel_to_llama()
+
         model = AutoModelForCausalLM.from_pretrained(
             "meta-llama/Llama-3.2-3B-Instruct",
             torch_dtype=torch.bfloat16,
