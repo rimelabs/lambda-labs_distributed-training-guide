@@ -18,11 +18,13 @@ from transformers import (
     AutoTokenizer,
     default_data_collator,
 )
+from packed_dataset import pad_and_collate
 
 LOGGER = logging.getLogger(__name__)
 
-
 def main():
+    torch.set_float32_matmul_precision('high')
+
     parser = _get_parser()
     args = parser.parse_args()
 
@@ -44,21 +46,32 @@ def main():
     torch.manual_seed(args.seed)
 
     # Note: Initializing an **untrained** model
-    config = AutoConfig.from_pretrained(args.model_name, use_cache=False)
+    config = AutoConfig.from_pretrained("meta-llama/Llama-3.2-3B-Instruct", use_cache=False)
     with device:
-        model = AutoModelForCausalLM.from_config(config, torch_dtype=dtype)
+        model = AutoModelForCausalLM.from_pretrained(
+            "meta-llama/Llama-3.2-3B-Instruct",
+            torch_dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2"
+        )
+
+    number_add_tokens = 7 * 4096 + 10
+    new_tokens = [f"<custom_token_{i}>" for i in range(0, number_add_tokens + 1)]
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-3B-Instruct")
+    tokenizer.add_tokens(new_tokens)
+    model.resize_token_embeddings(len(tokenizer))
+
     LOGGER.info(f"{sum(p.numel() for p in model.parameters())} model parameters")
 
-    train_data = _load_and_preprocess_data(args, config)
+    train_data = datasets.Dataset.load_from_disk("/workspace/tmp/pretrain_ds_first-1M-packed-8192").with_format("torch")
     LOGGER.info(f"{len(train_data)} training samples")
 
     # Standard pytorch dataset iterator
     dataloader = DataLoader(
         train_data,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=False,
         drop_last=True,
-        collate_fn=default_data_collator,
+        collate_fn=pad_and_collate,
     )
     LOGGER.info(f"{len(dataloader)} batches per epoch")
 
@@ -154,7 +167,7 @@ def main():
             progress_bar.update(1)
 
             if state["global_step"] % args.log_freq == 0:
-                tok_per_step = args.batch_size * args.seq_length
+                tok_per_step = args.batch_size * 8_192
                 ms_per_step = sum(t.avg_elapsed_ms() for t in timers.values())
                 info = {
                     "global_step": state["global_step"],
@@ -189,63 +202,6 @@ def main():
                     json.dump(state, fp)
 
         state["epoch_step"] = 0
-
-
-def _load_and_preprocess_data(args, config):
-    """
-    Function created using code found in
-    https://github.com/huggingface/transformers/blob/v4.45.1/examples/pytorch/language-modeling/run_clm_no_trainer.py
-    """
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-
-    data = datasets.load_dataset(args.dataset_name, trust_remote_code=True)
-
-    column_names = data["train"].column_names
-    text_column_name = "text" if "text" in column_names else column_names[0]
-
-    def tokenize_function(examples):
-        return tokenizer(examples[text_column_name])
-
-    tokenized_datasets = data.map(
-        tokenize_function,
-        batched=True,
-        remove_columns=column_names,
-        num_proc=multiprocessing.cpu_count(),
-        load_from_cache_file=True,
-        desc="Running tokenizer on dataset",
-    )
-
-    seq_length = args.seq_length or tokenizer.model_max_length
-    if seq_length > config.max_position_embeddings:
-        seq_length = min(1024, config.max_position_embeddings)
-
-    # Main data processing function that will concatenate all texts from our dataset and generate chunks of block_size.
-    def group_texts(examples):
-        # Concatenate all texts.
-        concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
-        # We drop the small remainder, and if the total_length < block_size  we exclude this batch and return an empty dict.
-        # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
-        if total_length > seq_length:
-            total_length = (total_length // seq_length) * seq_length
-        # Split by chunks of max_len.
-        result = {
-            k: [t[i : i + seq_length] for i in range(0, total_length, seq_length)]
-            for k, t in concatenated_examples.items()
-        }
-        result["labels"] = result["input_ids"].copy()
-        return result
-
-    lm_datasets = tokenized_datasets.map(
-        group_texts,
-        batched=True,
-        num_proc=multiprocessing.cpu_count(),
-        load_from_cache_file=True,
-        desc=f"Grouping texts in chunks of {seq_length}",
-    )
-
-    return lm_datasets["train"]
-
 
 def get_mem_stats(device=None):
     mem = torch.cuda.memory_stats(device)
@@ -291,16 +247,16 @@ class LocalTimer:
 def _get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--experiment-name", default=None, required=True)
-    parser.add_argument("-d", "--dataset-name", default=None, required=True)
-    parser.add_argument("-m", "--model-name", default=None, required=True)
+    # parser.add_argument("-d", "--dataset-name", default=None, required=True)
+    # parser.add_argument("-m", "--model-name", default=None, required=True)
     parser.add_argument("--save-dir", default="../outputs")
     parser.add_argument("--seed", default=0, type=int)
-    parser.add_argument("--num-epochs", default=100, type=int)
+    parser.add_argument("--num-epochs", default=1, type=int)
     parser.add_argument("--lr", default=3e-5, type=float)
     parser.add_argument("-b", "--batch-size", default=1, type=int)
-    parser.add_argument("--log-freq", default=100, type=int)
+    parser.add_argument("--log-freq", default=50, type=int)
     parser.add_argument("--ckpt-freq", default=500, type=int)
-    parser.add_argument("-s", "--seq-length", default=1024, type=int)
+    # parser.add_argument("-s", "--seq-length", default=1024, type=int)
     return parser
 
 
